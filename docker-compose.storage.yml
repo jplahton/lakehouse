@@ -1,0 +1,78 @@
+# Storage node: MinIO + Nessie (Iceberg REST catalog)
+# Run: docker compose -f docker-compose.storage.yml up -d
+
+name: lakehouse-storage
+
+services:
+
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: minio
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+    ports:
+      - "9000:9000"   # S3 API — analytics machine connects here
+      - "9001:9001"   # Web console
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio_data:/data
+    networks:
+      - lakehouse
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  minio-init:
+    image: quay.io/minio/mc:latest
+    container_name: minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - lakehouse
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin};
+        mc mb --ignore-existing local/lakehouse;
+        echo 'Bucket ready.';
+      "
+
+  # Iceberg REST catalog — analytics machine points here for table discovery
+  nessie:
+    image: ghcr.io/projectnessie/nessie:latest
+    container_name: nessie
+    restart: unless-stopped
+    ports:
+      - "19120:19120"   # REST catalog API + UI
+    environment:
+      NESSIE_VERSION_STORE_TYPE: ROCKSDB
+      NESSIE_VERSION_STORE_PERSIST_ROCKS_DB_DATABASE_PATH: /var/lib/nessie/rocks
+    volumes:
+      - nessie_data:/var/lib/nessie
+    networks:
+      - lakehouse
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:19120/api/v2/config"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+volumes:
+  minio_data:
+  nessie_data:
+
+networks:
+  lakehouse:
+    driver: bridge

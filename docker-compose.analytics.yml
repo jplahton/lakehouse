@@ -1,0 +1,80 @@
+# Analytics machine: Flink (unified batch + stream processing)
+# Run: docker compose -f docker-compose.analytics.yml up -d
+
+name: lakehouse-analytics
+#
+# Prerequisites:
+#   - Storage node must be running (docker-compose.storage.yml)
+#   - Set STORAGE_NODE_IP, MINIO_ROOT_USER, MINIO_ROOT_PASSWORD in .env
+#
+# Flink UI:  http://localhost:8081
+# SQL client: docker exec -it flink-jobmanager ./bin/sql-client.sh
+
+services:
+
+  jobmanager:
+    image: apache/flink:2.1
+    container_name: flink-jobmanager
+    restart: unless-stopped
+    ports:
+      - "8081:8081"   # Flink web UI
+    command: jobmanager
+    environment:
+      STORAGE_NODE_IP: ${STORAGE_NODE_IP}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: jobmanager
+        jobmanager.memory.process.size: 1g
+        fs.s3a.endpoint: http://${STORAGE_NODE_IP}:9000
+        fs.s3a.path.style.access: true
+        fs.s3a.access.key: ${MINIO_ROOT_USER:-minioadmin}
+        fs.s3a.secret.key: ${MINIO_ROOT_PASSWORD:-minioadmin}
+        fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
+    # Mount extra JARs: Iceberg Flink runtime + S3 plugin
+    # Download and place in ./flink-lib/ before starting:
+    #   - flink-s3-fs-hadoop-<version>.jar
+    #   - iceberg-flink-runtime-<version>.jar
+    volumes:
+      - ./flink-lib:/opt/flink/lib/extra
+    networks:
+      - analytics
+    deploy:
+      resources:
+        limits:
+          memory: 1200m
+
+  taskmanager:
+    image: apache/flink:2.1
+    container_name: flink-taskmanager
+    restart: unless-stopped
+    command: taskmanager
+    environment:
+  #    SIM_DEVICES: ${SIM_DEVICES}
+  #    SIM_RATE_PER_SEC: ${SIM_RATE_PER_SEC}
+      STORAGE_NODE_IP: ${STORAGE_NODE_IP}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: jobmanager
+        taskmanager.memory.process.size: 2g
+        taskmanager.numberOfTaskSlots: 2
+        fs.s3a.endpoint: http://${STORAGE_NODE_IP}:9000
+        fs.s3a.path.style.access: true
+        fs.s3a.access.key: ${MINIO_ROOT_USER:-minioadmin}
+        fs.s3a.secret.key: ${MINIO_ROOT_PASSWORD:-minioadmin}
+        fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
+    volumes:
+      - ./flink-lib:/opt/flink/lib/extra
+    depends_on:
+      - jobmanager
+    networks:
+      - analytics
+    deploy:
+      resources:
+        limits:
+          memory: 2200m
+
+networks:
+  analytics:
+    driver: bridge
